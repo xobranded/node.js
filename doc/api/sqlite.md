@@ -439,6 +439,11 @@ wrapper around [`sqlite3_create_function_v2()`][].
 
 <!-- YAML
 added: v24.10.0
+changes:
+  - version: REPLACEME
+    pr-url: https://github.com/nodejs/node/pull/65156
+    description: Accessing the invoking database connection from the authorizer
+                 callback now throws.
 -->
 
 * `callback` {Function|null} The authorizer function to set, or `null` to
@@ -463,6 +468,23 @@ The callback must return one of the following constants:
 * `SQLITE_OK` - Allow the operation.
 * `SQLITE_DENY` - Deny the operation (causes an error).
 * `SQLITE_IGNORE` - Ignore the operation (silently skip).
+
+SQLite requires that the authorizer callback not modify the database connection
+that invoked it, which includes preparing and stepping statements. Methods that
+would do so throw an error with code `ERR_INVALID_STATE` while the callback is
+on the stack, including `database.prepare()`, `database.exec()`, the execution
+methods of that connection's statements, iterators, and tag stores, and
+`database.setAuthorizer()` itself. Other connections remain usable.
+
+The callback can also be invoked from within `statement.run()`,
+`statement.get()`, and similar methods, because SQLite may re-prepare a
+statement during execution after a schema change.
+
+Separately, `statement.close()` throws if the statement is the one currently
+being executed, because finalizing it would free the virtual machine that is
+running. This applies to any callback SQLite invokes during execution, such as
+a user-defined function. Other statements on the connection can still be
+finalized.
 
 ```cjs
 const { DatabaseSync, constants } = require('node:sqlite');

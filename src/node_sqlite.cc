@@ -96,6 +96,25 @@ inline MaybeLocal<String> Utf8StringMaybeOneByte(Isolate* isolate,
     }                                                                          \
   } while (0)
 
+// SQLite requires that an authorizer callback not modify the connection that
+// invoked it. Preparing and stepping statements both count as modifying it.
+// See https://www.sqlite.org/c3ref/set_authorizer.html.
+#define THROW_AND_RETURN_IF_IN_AUTHORIZER(env, db)                             \
+  THROW_AND_RETURN_ON_BAD_STATE(                                               \
+      (env),                                                                   \
+      (db)->IsInAuthorizerCallback(),                                          \
+      "database cannot be accessed from an authorizer callback")
+
+// Finalizing a statement frees its virtual machine. A callback that SQLite
+// invokes from inside sqlite3_step() therefore must not finalize the statement
+// being stepped, which would be a use-after-free rather than merely a contract
+// violation. Finalizing other statements on the connection stays allowed.
+#define THROW_AND_RETURN_IF_STEPPING(env, stmt)                                \
+  THROW_AND_RETURN_ON_BAD_STATE(                                               \
+      (env),                                                                   \
+      (stmt)->db_->IsSteppingStatement((stmt)->statement_),                    \
+      "statement cannot be finalized while it is being executed")
+
 #define SQLITE_VALUE_TO_JS(from, isolate, use_big_int_args, result, ...)       \
   do {                                                                         \
     switch (sqlite3_##from##_type(__VA_ARGS__)) {                              \
@@ -825,6 +844,12 @@ Intercepted DatabaseSyncLimits::LimitsSetter(
     return Intercepted::kYes;
   }
 
+  if (limits->database_->IsInAuthorizerCallback()) {
+    THROW_ERR_INVALID_STATE(
+        env, "database cannot be accessed from an authorizer callback");
+    return Intercepted::kYes;
+  }
+
   if (!value->IsNumber()) {
     THROW_ERR_INVALID_ARG_TYPE(
         isolate, "Limit value must be a non-negative integer or Infinity.");
@@ -1081,6 +1106,7 @@ void DatabaseSync::CreateTagStore(const FunctionCallbackInfo<Value>& args) {
     THROW_ERR_INVALID_STATE(env, "database is not open");
     return;
   }
+  THROW_AND_RETURN_IF_IN_AUTHORIZER(env, db);
   int capacity = 1000;
   if (args.Length() > 0 && !args[0]->IsUndefined()) {
     if (!args[0]->IsNumber()) {
@@ -1483,6 +1509,7 @@ void DatabaseSync::Prepare(const FunctionCallbackInfo<Value>& args) {
   ASSIGN_OR_RETURN_UNWRAP(&db, args.This());
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(env, !db->IsOpen(), "database is not open");
+  THROW_AND_RETURN_IF_IN_AUTHORIZER(env, db);
 
   if (!args[0]->IsString()) {
     THROW_ERR_INVALID_ARG_TYPE(env->isolate(),
@@ -1606,6 +1633,7 @@ void DatabaseSync::Exec(const FunctionCallbackInfo<Value>& args) {
   ASSIGN_OR_RETURN_UNWRAP(&db, args.This());
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(env, !db->IsOpen(), "database is not open");
+  THROW_AND_RETURN_IF_IN_AUTHORIZER(env, db);
 
   if (!args[0]->IsString()) {
     THROW_ERR_INVALID_ARG_TYPE(env->isolate(),
@@ -1630,6 +1658,7 @@ void DatabaseSync::CustomFunction(const FunctionCallbackInfo<Value>& args) {
   ASSIGN_OR_RETURN_UNWRAP(&db, args.This());
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(env, !db->IsOpen(), "database is not open");
+  THROW_AND_RETURN_IF_IN_AUTHORIZER(env, db);
 
   if (!args[0]->IsString()) {
     THROW_ERR_INVALID_ARG_TYPE(env->isolate(),
@@ -1803,6 +1832,7 @@ void DatabaseSync::Serialize(const FunctionCallbackInfo<Value>& args) {
   ASSIGN_OR_RETURN_UNWRAP(&db, args.This());
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(env, !db->IsOpen(), "database is not open");
+  THROW_AND_RETURN_IF_IN_AUTHORIZER(env, db);
 
   std::string db_name = "main";
   if (!args[0]->IsUndefined()) {
@@ -1937,6 +1967,7 @@ void DatabaseSync::AggregateFunction(const FunctionCallbackInfo<Value>& args) {
   ASSIGN_OR_RETURN_UNWRAP(&db, args.This());
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(env, !db->IsOpen(), "database is not open");
+  THROW_AND_RETURN_IF_IN_AUTHORIZER(env, db);
   Utf8Value name(env->isolate(), args[0].As<String>());
   Local<Object> options = args[1].As<Object>();
   Local<Value> start_v;
@@ -2148,6 +2179,7 @@ void DatabaseSync::CreateSession(const FunctionCallbackInfo<Value>& args) {
   DatabaseSync* db;
   ASSIGN_OR_RETURN_UNWRAP(&db, args.This());
   THROW_AND_RETURN_ON_BAD_STATE(env, !db->IsOpen(), "database is not open");
+  THROW_AND_RETURN_IF_IN_AUTHORIZER(env, db);
 
   sqlite3_session* pSession;
   int r = sqlite3session_create(db->connection_, db_name.c_str(), &pSession);
@@ -2317,6 +2349,7 @@ void DatabaseSync::ApplyChangeset(const FunctionCallbackInfo<Value>& args) {
   ASSIGN_OR_RETURN_UNWRAP(&db, args.This());
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(env, !db->IsOpen(), "database is not open");
+  THROW_AND_RETURN_IF_IN_AUTHORIZER(env, db);
 
   if (!args[0]->IsUint8Array()) {
     THROW_ERR_INVALID_ARG_TYPE(
@@ -2452,6 +2485,7 @@ void DatabaseSync::EnableLoadExtension(
   ASSIGN_OR_RETURN_UNWRAP(&db, args.This());
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(env, !db->IsOpen(), "database is not open");
+  THROW_AND_RETURN_IF_IN_AUTHORIZER(env, db);
 
   Isolate* isolate = env->isolate();
   if (!args[0]->IsBoolean()) {
@@ -2480,6 +2514,7 @@ void DatabaseSync::EnableDefensive(const FunctionCallbackInfo<Value>& args) {
   ASSIGN_OR_RETURN_UNWRAP(&db, args.This());
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(env, !db->IsOpen(), "database is not open");
+  THROW_AND_RETURN_IF_IN_AUTHORIZER(env, db);
 
   Isolate* isolate = env->isolate();
   if (!args[0]->IsBoolean()) {
@@ -2505,6 +2540,7 @@ void DatabaseSync::LoadExtension(const FunctionCallbackInfo<Value>& args) {
       env, !db->allow_load_extension_, "extension loading is not allowed");
   THROW_AND_RETURN_ON_BAD_STATE(
       env, !db->enable_load_extension_, "extension loading is not allowed");
+  THROW_AND_RETURN_IF_IN_AUTHORIZER(env, db);
 
   if (!args[0]->IsString()) {
     THROW_ERR_INVALID_ARG_TYPE(env->isolate(),
@@ -2533,6 +2569,7 @@ void DatabaseSync::SetAuthorizer(const FunctionCallbackInfo<Value>& args) {
   ASSIGN_OR_RETURN_UNWRAP(&db, args.This());
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(env, !db->IsOpen(), "database is not open");
+  THROW_AND_RETURN_IF_IN_AUTHORIZER(env, db);
 
   Isolate* isolate = env->isolate();
 
@@ -2569,6 +2606,7 @@ int DatabaseSync::AuthorizerCallback(void* user_data,
                                      const char* param4) {
   DatabaseSync* db = static_cast<DatabaseSync*>(user_data);
   CallbackDepthGuard guard(db);
+  AuthorizerDepthGuard authorizer_guard(db);
   Environment* env = db->env();
   Isolate* isolate = env->isolate();
   HandleScope handle_scope(isolate);
@@ -2682,12 +2720,20 @@ void StatementSync::Close(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(
       env, stmt->IsFinalized(), "statement has been finalized");
+  THROW_AND_RETURN_IF_STEPPING(env, stmt);
   stmt->Close();
 }
 
 void StatementSync::Dispose(const FunctionCallbackInfo<Value>& args) {
   StatementSync* stmt;
   ASSIGN_OR_RETURN_UNWRAP(&stmt, args.This());
+  Environment* env = Environment::GetCurrent(args);
+  // Disposal is idempotent, so an already-finalized statement is a no-op even
+  // inside a callback.
+  if (stmt->IsFinalized()) {
+    return;
+  }
+  THROW_AND_RETURN_IF_STEPPING(env, stmt);
   stmt->Close();
 }
 
@@ -2968,6 +3014,7 @@ MaybeLocal<Value> StatementExecutionHelper::All(Environment* env,
   LocalVector<Value> row_values(isolate);
   LocalVector<Name> row_keys(isolate);
 
+  SteppingStatementGuard stepping(db, stmt);
   while ((r = sqlite3_step(stmt)) == SQLITE_ROW) {
     if (num_cols == 0) {
       num_cols = sqlite3_column_count(stmt);
@@ -3010,7 +3057,10 @@ MaybeLocal<Object> StatementExecutionHelper::Run(Environment* env,
                                                  bool use_big_ints) {
   Isolate* isolate = env->isolate();
   EscapableHandleScope scope(isolate);
-  sqlite3_step(stmt);
+  {
+    SteppingStatementGuard stepping(db, stmt);
+    sqlite3_step(stmt);
+  }
   int r = sqlite3_reset(stmt);
   CHECK_ERROR_OR_THROW(isolate, db, r, SQLITE_OK, MaybeLocal<Object>());
 
@@ -3088,7 +3138,11 @@ MaybeLocal<Value> StatementExecutionHelper::Get(Environment* env,
   EscapableHandleScope scope(isolate);
   auto reset = OnScopeLeave([&]() { sqlite3_reset(stmt); });
 
-  int r = sqlite3_step(stmt);
+  int r;
+  {
+    SteppingStatementGuard stepping(db, stmt);
+    r = sqlite3_step(stmt);
+  }
   if (r == SQLITE_DONE) return scope.Escape(Undefined(isolate));
   if (r != SQLITE_ROW) {
     THROW_ERR_SQLITE_ERROR(isolate, db);
@@ -3132,6 +3186,7 @@ void StatementSync::All(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(
       env, stmt->IsFinalized(), "statement has been finalized");
+  THROW_AND_RETURN_IF_IN_AUTHORIZER(env, stmt->db_.get());
   Isolate* isolate = env->isolate();
   int r = stmt->ResetStatement();
   CHECK_ERROR_OR_THROW(isolate, stmt->db_.get(), r, SQLITE_OK, void());
@@ -3159,6 +3214,7 @@ void StatementSync::Iterate(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(
       env, stmt->IsFinalized(), "statement has been finalized");
+  THROW_AND_RETURN_IF_IN_AUTHORIZER(env, stmt->db_.get());
   int r = stmt->ResetStatement();
   CHECK_ERROR_OR_THROW(env->isolate(), stmt->db_.get(), r, SQLITE_OK, void());
 
@@ -3182,6 +3238,7 @@ void StatementSync::Get(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(
       env, stmt->IsFinalized(), "statement has been finalized");
+  THROW_AND_RETURN_IF_IN_AUTHORIZER(env, stmt->db_.get());
   int r = stmt->ResetStatement();
   CHECK_ERROR_OR_THROW(env->isolate(), stmt->db_.get(), r, SQLITE_OK, void());
 
@@ -3206,6 +3263,7 @@ void StatementSync::Run(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(
       env, stmt->IsFinalized(), "statement has been finalized");
+  THROW_AND_RETURN_IF_IN_AUTHORIZER(env, stmt->db_.get());
   int r = stmt->ResetStatement();
   CHECK_ERROR_OR_THROW(env->isolate(), stmt->db_.get(), r, SQLITE_OK, void());
 
@@ -3488,6 +3546,7 @@ void SQLTagStore::Run(const FunctionCallbackInfo<Value>& args) {
 
   THROW_AND_RETURN_ON_BAD_STATE(
       env, !session->database_->IsOpen(), "database is not open");
+  THROW_AND_RETURN_IF_IN_AUTHORIZER(env, session->database_.get());
 
   BaseObjectPtr<StatementSync> stmt = PrepareStatement(args);
 
@@ -3514,6 +3573,7 @@ void SQLTagStore::Iterate(const FunctionCallbackInfo<Value>& args) {
 
   THROW_AND_RETURN_ON_BAD_STATE(
       env, !session->database_->IsOpen(), "database is not open");
+  THROW_AND_RETURN_IF_IN_AUTHORIZER(env, session->database_.get());
 
   BaseObjectPtr<StatementSync> stmt = PrepareStatement(args);
 
@@ -3542,6 +3602,7 @@ void SQLTagStore::Get(const FunctionCallbackInfo<Value>& args) {
 
   THROW_AND_RETURN_ON_BAD_STATE(
       env, !session->database_->IsOpen(), "database is not open");
+  THROW_AND_RETURN_IF_IN_AUTHORIZER(env, session->database_.get());
 
   BaseObjectPtr<StatementSync> stmt = PrepareStatement(args);
 
@@ -3571,6 +3632,7 @@ void SQLTagStore::All(const FunctionCallbackInfo<Value>& args) {
 
   THROW_AND_RETURN_ON_BAD_STATE(
       env, !session->database_->IsOpen(), "database is not open");
+  THROW_AND_RETURN_IF_IN_AUTHORIZER(env, session->database_.get());
 
   BaseObjectPtr<StatementSync> stmt = PrepareStatement(args);
 
@@ -3597,6 +3659,10 @@ void SQLTagStore::All(const FunctionCallbackInfo<Value>& args) {
 void SQLTagStore::Clear(const FunctionCallbackInfo<Value>& args) {
   SQLTagStore* store;
   ASSIGN_OR_RETURN_UNWRAP(&store, args.This());
+  Environment* env = Environment::GetCurrent(args);
+  if (store->database_) {
+    THROW_AND_RETURN_IF_IN_AUTHORIZER(env, store->database_.get());
+  }
   store->sql_tags_.Clear();
 }
 
@@ -3790,6 +3856,7 @@ void StatementSyncIterator::Next(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(
       env, iter->stmt_->IsFinalized(), "statement has been finalized");
+  THROW_AND_RETURN_IF_IN_AUTHORIZER(env, iter->stmt_->db_.get());
   Isolate* isolate = env->isolate();
 
   auto iter_template = getLazyIterTemplate(env);
@@ -3812,7 +3879,12 @@ void StatementSyncIterator::Next(const FunctionCallbackInfo<Value>& args) {
       iter->statement_reset_generation_ != iter->stmt_->reset_generation_,
       "iterator was invalidated");
 
-  int r = sqlite3_step(iter->stmt_->statement_);
+  int r;
+  {
+    SteppingStatementGuard stepping(iter->stmt_->db_.get(),
+                                    iter->stmt_->statement_);
+    r = sqlite3_step(iter->stmt_->statement_);
+  }
   if (r != SQLITE_ROW) {
     CHECK_ERROR_OR_THROW(
         env->isolate(), iter->stmt_->db_.get(), r, SQLITE_DONE, void());
@@ -3867,6 +3939,7 @@ void StatementSyncIterator::Return(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(
       env, iter->stmt_->IsFinalized(), "statement has been finalized");
+  THROW_AND_RETURN_IF_IN_AUTHORIZER(env, iter->stmt_->db_.get());
   Isolate* isolate = env->isolate();
 
   sqlite3_reset(iter->stmt_->statement_);
@@ -3945,6 +4018,7 @@ void Session::Changeset(const FunctionCallbackInfo<Value>& args) {
       env, !session->database_->IsOpen(), "database is not open");
   THROW_AND_RETURN_ON_BAD_STATE(
       env, session->session_ == nullptr, "session is not open");
+  THROW_AND_RETURN_IF_IN_AUTHORIZER(env, session->database_.get());
 
   int nChangeset;
   void* pChangeset;
