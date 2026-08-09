@@ -670,7 +670,7 @@ console.log(query.get());
 added: v22.5.0
 changes:
   - version: REPLACEME
-    pr-url: https://github.com/nodejs/node/pull/REPLACEME
+    pr-url: https://github.com/nodejs/node/pull/62419
     description: Throws `ERR_INVALID_ARG_VALUE` if `sql` contains no statement.
 -->
 
