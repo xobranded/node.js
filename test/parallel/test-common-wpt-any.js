@@ -2,6 +2,7 @@
 
 require('../common');
 const assert = require('assert');
+const path = require('path');
 const {
   getHarnessErrorName,
   getUnexpectedPasses,
@@ -59,6 +60,11 @@ const runner = new WPTRunner('WebCryptoAPI');
 runner.pretendGlobalThisAs('Window');
 assert.match(runner.fullInitScript(specs[0]), /globalThis\.Window/);
 assert.doesNotMatch(runner.fullInitScript(specs[1]), /globalThis\.Window/);
+
+const nonTestDirs = new Set(['resources', 'support', 'tools']);
+const workerRunner = new WPTRunner('workers');
+assert.ok([...workerRunner.specs].every((spec) =>
+  !spec.filename.split(path.sep).some((part) => nonTestDirs.has(part))));
 
 const variantSpecs = WPTTestSpec.from(
   'WebCryptoAPI',

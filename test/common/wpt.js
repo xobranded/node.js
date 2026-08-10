@@ -13,6 +13,7 @@ const { Worker } = require('worker_threads');
 const { fork } = require('child_process');
 
 const workerPath = path.join(__dirname, 'wpt/worker.js');
+const wptNonTestDirs = new Set(['resources', 'support', 'tools']);
 
 function getBrowserProperties() {
   const { node: version } = process.versions; // e.g. 18.13.0, 20.0.0-nightly202302078e6e215481
@@ -592,6 +593,9 @@ class StatusLoader {
       const filepath = path.join(dir, file);
       const stat = fs.statSync(filepath);
       if (stat.isDirectory()) {
+        if (wptNonTestDirs.has(file)) {
+          continue;
+        }
         const list = this.grep(filepath);
         result = result.concat(list);
       } else {

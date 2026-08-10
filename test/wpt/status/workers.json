@@ -80,9 +80,6 @@
       ]
     }
   },
-  "modules/resources/*.sub.js": {
-    "skip": "Not a test file; used as a worker script by other tests"
-  },
   "modules/shared-worker-import-blob-url.window.js": {
     "skip": "SharedWorker is not implemented"
   },
