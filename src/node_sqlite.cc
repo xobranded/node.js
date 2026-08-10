@@ -1581,6 +1581,16 @@ void DatabaseSync::Prepare(const FunctionCallbackInfo<Value>& args) {
   int r = sqlite3_prepare_v2(db->connection_, *sql, -1, &s, nullptr);
 
   CHECK_ERROR_OR_THROW(env->isolate(), db, r, SQLITE_OK, void());
+
+  // sqlite3_prepare_v2() reports success without producing a statement when
+  // the input holds no SQL, such as a comment. Such a statement can never be
+  // stepped, and tracking it would leave a dangling pointer in statements_
+  // because its destructor treats a null statement as already finalized.
+  if (s == nullptr) {
+    THROW_ERR_INVALID_ARG_VALUE(env, "The SQL query contains no statements.");
+    return;
+  }
+
   BaseObjectPtr<StatementSync> stmt =
       StatementSync::Create(env, BaseObjectPtr<DatabaseSync>(db), s);
   db->statements_.insert(stmt.get());
@@ -3656,6 +3666,13 @@ BaseObjectPtr<StatementSync> SQLTagStore::PrepareStatement(
     if (r != SQLITE_OK) {
       THROW_ERR_SQLITE_ERROR(isolate, session->database_.get());
       sqlite3_finalize(s);
+      return BaseObjectPtr<StatementSync>();
+    }
+
+    // As in DatabaseSync::Prepare(), reject input that holds no SQL rather
+    // than caching a statement that can never be bound or stepped.
+    if (s == nullptr) {
+      THROW_ERR_INVALID_ARG_VALUE(env, "The SQL query contains no statements.");
       return BaseObjectPtr<StatementSync>();
     }
 
