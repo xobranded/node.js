@@ -130,6 +130,18 @@ async function main() {
       runDriver(driver, spec, 'process'),
     );
   }
+
+  const windowResults = runDriver(
+    'test-events.js',
+    'dom/events/Event-constructors.any.html',
+    'thread',
+  );
+  const workerResults = runDriver(
+    'test-events.js',
+    'dom/events/Event-constructors.any.worker.html',
+    'thread',
+  ).map((line) => line.replace('.any.worker.html', '.any.html'));
+  assert.deepStrictEqual(workerResults, windowResults);
 }
 
 main().then(common.mustCall());

@@ -114,6 +114,10 @@ globalThis.onmessage = ({ data }) => {
     });
   }
 
+  if (data.title) {
+    globalThis.META_TITLE = data.title;
+  }
+
   if (data.isAnyTest) {
     globalThis.importScripts('/resources/testharness.js');
     for (const script of data.scripts) {

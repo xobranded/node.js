@@ -992,6 +992,7 @@ class WPTRunner {
             path: absolutePath,
             isAnyTest,
             initScript: this.initScript,
+            title: meta.title,
             variant: spec.variant,
             scripts: meta.script?.map(
               (script) => this.resource.toRealFilePath(relativePath, script),
